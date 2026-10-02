@@ -32,7 +32,6 @@ class Stack
     };
     Node* top;
     int32_t count;
-
 public:
     // Implement these functions:
     Stack()
@@ -98,7 +97,6 @@ public:
         return ae;
     }
 };
-
 
 // Timeline : doubly linked list of Snapshots
 struct Snapshot; // fwd declaration;
@@ -206,8 +204,8 @@ bool readSourceLine(ifstream& in, string& out)
     string nbl;
     while (getline(in, nbl))
     {
-        int le = nbl.length();
-        int sr = 0;
+        int32_t le = nbl.length();
+        int32_t sr = 0;
         while (sr < le && (nbl[sr] == ' ' || nbl[sr] == '\t' || nbl[sr] == '\r' || nbl[sr] == '\n'))
         {
             sr++;
@@ -216,32 +214,31 @@ bool readSourceLine(ifstream& in, string& out)
         {
             continue; 
         }
-        int end = le - 1;
+        int32_t end = le - 1;
         while (end >= sr && (nbl[end] == ' ' || nbl[end] == '\t' || nbl[end] == '\r' || nbl[end] == '\n'))
         {
             end--;
         }
         out = "";
-        for (int s = sr; s <= end; s++)
+        for (int32_t s = sr; s <= end; s++)
         {
             out += nbl[s];
         }
         return true;
     }
-    return false;
-    // reads the next nonblank line
+    return false;  // read the next nonblank line
 }
 string firstWord(const string& line)
 {
     // returns first word from the input 
-    int len = line.length();
-    int wr = 0;
+    int32_t len = line.length();
+    int32_t wr = 0;
     while (wr < len && line[wr] != ' ' && line[wr] != '\t')
     {
         wr++;
     }
     string rst = "";
-    for (int a = 0; a < wr; a++)
+    for (int32_t a = 0; a < wr; a++)
     {
         rst = rst + line[a];
     }
@@ -249,8 +246,8 @@ string firstWord(const string& line)
 }
 string secondWord(const string& line)
 {
-    int le = line.length();
-    int w = 0;
+    int32_t le = line.length();
+    int32_t w = 0;
     while (w < le && line[w] != ' ' && line[w] != '\t')
     {
         w++;
@@ -280,33 +277,32 @@ bool validateProgram(const char* sourcePath)
         return 0;
     }
     string li;
-    int ct = 0;
+    char ct = '0';
     while (readSourceLine(red, li))
     {
         string fw = firstWord(li);
         if (fw == "func")
         {
-            if (ct == 1)
+            if (ct == '1')
             {
                 return 0; 
             }
-            ct = 1;
+            ct = '1';
         }
         else if (fw == "func_end")
         {
-            if (ct == 0)
+            if (ct == '0')
             {
                 return 0; 
             }
-            ct = 0; 
+            ct = '0'; 
         }
     }
-    if (ct == 1)
+    if (ct == '1')
     {
         return 0; 
     }
     return 1;
-
 }
 
 // PASS 0x1: RESOLVE() -> resolve.bin
@@ -314,9 +310,31 @@ int64_t writeResolveRecord(FILE* f, int64_t offsetField, const string& text)
 {
     // writes one [offset(8B)][size(4B)][string] record at the current file position
     // returns this record's own starting byte position
+    int64_t sp = ftell(f);
+    int32_t si=text.length();
+    fwrite(&offsetField, sizeof(int64_t), 1, f);
+    fwrite(&si, sizeof(int32_t), 1, f);
+    fwrite(&text[0], sizeof(char), si, f);
+    return sp;
 }
 int64_t readResolveRecord(FILE* f, string& outText)
 {
+    int64_t oset = 0;
+    int32_t sz = 0;
+    if (fread(&oset, sizeof(int64_t), 1, f) != 1)
+    {
+        return -1;
+    }
+    if (fread(&sz, sizeof(int32_t), 1, f) != 1)
+    {
+        return -1;
+    }
+    outText.resize(sz);
+    if (fread(&outText[0], sizeof(char), sz, f) != (size_t)sz)
+    {
+        return -1;
+    }
+    return oset;
     // reads one record at the current position and advances past it, returns the offset field - the raw line text comes back untouched in outText.
 }
 int64_t resolveProgram(const char* sourcePath, const char* resolveBinPath)
