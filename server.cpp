@@ -351,7 +351,74 @@ int64_t resolveProgram(const char* sourcePath, const char* resolveBinPath)
     // with its target's position. Patching happens after the full write
     // Returns the byte offset of main's FUNC header record.
     // if there is no main return the error 
+    ifstream sorc(sourcePath);
+    if (!sorc.is_open())
+    {
+        cout << "file eror" << endl;
+        return -1;
+    }
+    FILE* wri_bin = fopen(resolveBinPath, "wb+");
+    if (wri_bin == NULL)
+    {
+        sorc.close();
+        cout << "error" << endl;  
+        return -1;
+    }
+    string li="";
+    while (readSourceLine(sorc, li))
+    {
+        string wrd = firstWord(li);
+        string w2 = secondWord(li);
+        int64_t dumb = writeResolveRecord(wri_bin, 0, li);
+        if(wrd=="call")
+        {
+            if (patchCount < MAX_PATCHES)
+            {
+                patches[patchCount].byteOffsetOfOffsetField = dumb;
+                patches[patchCount].targetFuncName = w2;
+                patchCount++;
+            }
+        }
+        else if(wrd=="func")
+        {
+            if (funcCount < MAX_FUNCS)
+            {
+                funcArray[funcCount].funcName = w2;
+                funcArray[funcCount].byteOffsetInResolveBin = dumb;
+                funcCount++;
+            }
+        }
+    }
+    for(int ae=0;ae<patchCount;ae++)
+    {
+        int64_t tar_ofs=-2;
+        for(int32_t re=0;re<funcCount;re++)
+        {
+            if(patches[ae].targetFuncName==funcArray[re].funcName)
+            {
+                tar_ofs=funcArray[re].byteOffsetInResolveBin;
+                break;
+            }
+        }
+        if(tar_ofs!=-2)
+        {
+            fseek(wri_bin,patches[ae].byteOffsetOfOffsetField,SEEK_SET);
+            fwrite(&tar_ofs, sizeof(int64_t), 1, wri_bin);
+        }
+    }
+    int64_t of_main = -1;
+    for (int32_t id = 0; id < funcCount;id++)
+    {
+        if (funcArray[id].funcName == "main")
+        {
+            of_main = funcArray[id].byteOffsetInResolveBin;
+            break;
+        }
+    }
+    fclose(wri_bin);
+    return of_main;
 }
+
 
 // PASS 0x2: EXECUTION (tokenization happens here)
 enum TokenType
@@ -371,6 +438,44 @@ int32_t tokenizeLine(const string& line, Token tokens[], int32_t maxTokens)
     // instruction set = [func, func_end, call, set, add, sub, mul and div]
     // next word is identifier like name of a function, variable name
     // after identifier all are the params/arg, space separated
+    int32_t le=line.length();
+    int32_t ct=0;
+    int32_t tok_cn=0;
+    while (ct < le&& tok_cn < maxTokens)
+    {
+        while (ct < le && line[ct] == ' ')
+        {
+            ct++;
+        }
+        if (ct >= le)
+        {
+            break;
+        }
+        string wrd = "";
+        while (ct < le && line[ct] != ' ')
+        {
+            wrd = wrd + line[ct];
+            ct++;
+        }
+        if (wrd != "")
+        {
+            tokens[tok_cn].text = wrd;
+            if (tok_cn == 0)
+            {
+                tokens[tok_cn].type = KEYWORD;
+            }
+            else if (tok_cn == 1)
+            {
+                tokens[tok_cn].type = IDENTIFIER;
+            }
+            else
+            {
+                tokens[tok_cn].type = PARAM;
+            }
+            tok_cn++;
+        }
+    }
+    return tok_cn;
 }
 Snapshot* buildSnapshot(Stack<Frame>& callStack)
 {
