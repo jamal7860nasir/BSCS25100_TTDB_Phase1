@@ -492,6 +492,23 @@ void executeProgram(const char* resolveBinPath, int64_t mainOffset, Timeline& ti
 
     // implementation:
     // execute line by line, and according to the keyword perform action
+    FILE* stk= fopen(resolveBinPath,"rb");
+    if (stk == NULL)
+    {
+        cout<<"file not open"<<endl;
+        return;
+    }
+    Stack<Frame> cl_st;
+    fseek(stk,mainOffset,SEEK_SET);
+    Frame mainn;
+    mainn.localCount=0;
+    mainn.argc=0;
+    mainn.func_name="main";
+    mainn.returnLine=-1;
+    cl_st.push(mainn);
+
+
+
 }
 
 // PASS 0x3: SERIALIZE TIMELINE
@@ -502,6 +519,14 @@ void writeTdbg(Timeline& timeline, const char* tdbgPath)
     // placing each snapshot in the file while maintaining the index(starting point of each nth snapshot)
     // after timeline add the index array i the file
     // update the header
+    FILE* tb = fopen(tdbgPath, "wb+");
+    if (tb == NULL)
+    {
+        return;
+    }
+    int32_t stp = timeline.getStepCount();
+    TTDBHeader hdr;
+    
 }
 // main section
 int32_t main()
