@@ -484,6 +484,29 @@ Snapshot* buildSnapshot(Stack<Frame>& callStack)
     snp->stackDepth = callStack.snapshot_into(snp->callStack, MAX_STACK_DEPTH);
     return snp;
 }
+
+Variable* find_var(Frame& frm, const string& nam)
+{
+    int32_t idx = 0;
+    while (idx < frm.argc)
+    {
+        if (frm.argv[idx].name == nam)
+        {
+            return &frm.argv[idx];
+        }
+        idx++;
+    }
+    idx = 0;
+    while (idx < frm.localCount)
+    {
+        if (frm.locals[idx].name == nam)
+        {
+            return &frm.locals[idx];
+        }
+        idx++;
+    }
+    return nullptr;
+}
 void executeProgram(const char* resolveBinPath, int64_t mainOffset, Timeline& timeline)
 {
     // initialize the call stack
@@ -492,23 +515,228 @@ void executeProgram(const char* resolveBinPath, int64_t mainOffset, Timeline& ti
 
     // implementation:
     // execute line by line, and according to the keyword perform action
-    FILE* stk= fopen(resolveBinPath,"rb");
-    if (stk == NULL)
+FILE* fp = fopen(resolveBinPath, "rb");
+    if (fp == NULL)
     {
-        cout<<"file not open"<<endl;
+        cout << "file not open" << endl;
         return;
     }
-    Stack<Frame> cl_st;
-    fseek(stk,mainOffset,SEEK_SET);
-    Frame mainn;
-    mainn.localCount=0;
-    mainn.argc=0;
-    mainn.func_name="main";
-    mainn.returnLine=-1;
-    cl_st.push(mainn);
+    Stack<Frame> cstk;
+    fseek(fp, mainOffset, SEEK_SET);
+    Frame mfrm;
+    mfrm.localCount = 0;
+    mfrm.argc = 0;
+    mfrm.func_name = "main";
+    mfrm.returnLine = -1;
+    cstk.push(mfrm);
+    string line;
+    Token tok[MAX_TOKENS];
+    Token htok[MAX_TOKENS];
+    char run = 't';
+    while (run == 't')
+    {
+        int64_t bp = ftell(fp);
+        int64_t of = readResolveRecord(fp, line);
+        if (of == -1)
+        {
+            break;
+        }
+        int32_t n = tokenizeLine(line, tok, MAX_TOKENS);
+        if (n == 0 || tok[0].text == "func")
+        {
+            continue;
+        }
+        if (tok[0].text == "set" || tok[0].text == "add" || tok[0].text == "sub" || tok[0].text == "mul" || tok[0].text == "div")
+        {
+            Frame& cur = cstk.peek();
+            int32_t val = 0;
+            if (n > 2)
+            {
+                string rhs = tok[2].text;
+                char is_num = 'f';
+                if (rhs[0] >= '0' && rhs[0] <= '9')
+                {
+                    is_num = 't';
+                }
+                if (rhs.length() > 1 && rhs[0] == '-' && rhs[1] >= '0' && rhs[1] <= '9')
+                {
+                    is_num = 't';
+                }
+                if (is_num == 't')
+                {
+                    int32_t sgn = 1;
+                    int32_t pos = 0;
+                    if (rhs[0] == '-')
+                    {
+                        sgn = -1;
+                        pos = 1;
+                    }
+                    while (pos < (int32_t)rhs.length())
+                    {
+                        val = val * 10 + (rhs[pos] - '0');
+                        pos++;
+                    }
+                    val = val * sgn;
+                }
+                else
+                {
+                    Variable* vp = find_var(cur, rhs);
+                    if (vp != nullptr)
+                    {
+                        val = vp->value;
+                    }
+                }
+            }
+            Variable* vp = find_var(cur, tok[1].text);
+            if (vp == nullptr && cur.localCount < MAX_VARS_PER_FRAME)
+            {
+                cur.locals[cur.localCount].name = tok[1].text;
+                cur.locals[cur.localCount].value = 0;
+                vp = &cur.locals[cur.localCount];
+                cur.localCount++;
+            }
+            if (vp != nullptr)
+            {
+                if (tok[0].text == "set")
+                {
+                    vp->value = val;
+                }
+                else if (tok[0].text == "add")
+                {
+                    vp->value = vp->value + val;
+                }
+                else if (tok[0].text == "sub")
+                {
+                    vp->value = vp->value - val;
+                }
+                else if (tok[0].text == "mul")
+                {
+                    vp->value = vp->value * val;
+                }
+                else if (tok[0].text == "div")
+                {
+                    if (val == 0)
+                    {
+                        cout << "divide by zero" << endl;
+                    }
+                    else
+                    {
+                        vp->value = vp->value / val;
+                    }
+                }
+            }
+        }
+        else if (tok[0].text == "call")
+        {
+            if (cstk.depth() >= MAX_STACK_DEPTH)
+            {
+                cout << "stack overflow" << endl;
+                run = 'f';
+            }
+            else
+            {
+                Frame& cur = cstk.peek();
+                Frame nfrm;
+                nfrm.func_name = tok[1].text;
+                nfrm.argc = 0;
+                nfrm.localCount = 0;
+                nfrm.returnLine = (int32_t)bp;
+                fseek(fp, of, SEEK_SET);
+                string hline;
+                int32_t mc = 0;
+                if (readResolveRecord(fp, hline) != -1)
+                {
+                    mc = tokenizeLine(hline, htok, MAX_TOKENS);
+                }
 
+                if (mc < 2 || htok[0].text != "func" || htok[1].text != tok[1].text)
+                {
+                    cout << "function not found" << endl;
+                    run = 'f';
+                }
+                else
+                {
+                    int32_t arg_idx = 0;
+                    while (arg_idx < mc - 2 && arg_idx < n - 2)
+                    {
+                        string param_txt = tok[2 + arg_idx].text;
+                        int32_t pval = 0;
+                        char is_num = 'f';
+                        if (param_txt[0] >= '0' && param_txt[0] <= '9')
+                        {
+                            is_num = 't';
+                        }
+                        if (param_txt.length() > 1 && param_txt[0] == '-' && param_txt[1] >= '0' && param_txt[1] <= '9')
+                        {
+                            is_num = 't';
+                        }
+                        if (is_num == 't')
+                        {
+                            int32_t sgn = 1;
+                            int32_t pos = 0;
+                            if (param_txt[0] == '-')
+                            {
+                                sgn = -1;
+                                pos = 1;
+                            }
+                            while (pos < (int32_t)param_txt.length())
+                            {
+                                pval = pval * 10 + (param_txt[pos] - '0');
+                                pos++;
+                            }
+                            pval = pval * sgn;
+                        }
+                        else
+                        {
+                            Variable* vp = find_var(cur, param_txt);
+                            if (vp != nullptr)
+                            {
+                                pval = vp->value;
+                            }
+                        }
 
-
+                        nfrm.argv[arg_idx].name = htok[2 + arg_idx].text;
+                        nfrm.argv[arg_idx].value = pval;
+                        arg_idx++;
+                    }
+                    nfrm.argc = arg_idx;
+                    cstk.push(nfrm);
+                }
+            }
+        }
+        else if (tok[0].text =="func_end")
+        {
+            if (cstk.depth() <= 1)
+            {
+                run = 'f';
+            }
+            else
+            {
+                Frame pf = cstk.pop();
+                Frame& cur = cstk.peek();
+                fseek(fp, pf.returnLine, SEEK_SET);
+                string lstr;
+                int32_t hlen = 0;
+                if (readResolveRecord(fp, lstr) != -1)
+                {
+                    hlen = tokenizeLine(lstr, htok, MAX_TOKENS);
+                }
+                int32_t k = 0;
+                while (k < pf.argc && k < hlen - 2)
+                {
+                    string var_nam = htok[2 + k].text;
+                    Variable* vp = find_var(cur, var_nam);
+                    if (vp != nullptr)
+                    {
+                        vp->value = pf.argv[k].value;
+                    }
+                    k++;
+                }
+            }
+        }
+        timeline.record(buildSnapshot(cstk));
+    }
+    fclose(fp);
 }
 
 // PASS 0x3: SERIALIZE TIMELINE
@@ -526,7 +754,34 @@ void writeTdbg(Timeline& timeline, const char* tdbgPath)
     }
     int32_t stp = timeline.getStepCount();
     TTDBHeader hdr;
-    
+    hdr.magic[0] = 'T';
+    hdr.magic[1] = 'T';
+    hdr.magic[2] = 'D';
+    hdr.magic[3] = 'B';
+    hdr.version = 1;
+    hdr.stepCount = stp;
+    hdr.indexOffset = 0;
+    fwrite(&hdr,sizeof(TTDBHeader), 1, tb);
+    int64_t* id_arr =new int64_t[stp];
+    int32_t ctn=0;
+    TimelineNode* cr = timeline.begin();
+    while (cr != nullptr && ctn < stp)
+    {
+        id_arr[ctn] = ftell(tb);
+        if (cr->data != nullptr)
+        {
+            fwrite(cr->data, sizeof(Snapshot), 1, tb);
+        }
+        cr = cr->next;
+        ctn++;
+    }
+    int64_t idx_pos = ftell(tb);
+    fwrite(id_arr, sizeof(int64_t), stp, tb);
+    hdr.indexOffset = idx_pos;
+    fseek(tb, 0, SEEK_SET);
+    fwrite(&hdr, sizeof(TTDBHeader), 1, tb);
+    delete[] id_arr;
+    fclose(tb);
 }
 // main section
 int32_t main()
