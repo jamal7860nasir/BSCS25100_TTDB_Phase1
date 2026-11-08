@@ -186,17 +186,56 @@ bool sendError(int sock, const string &message)
     }
 }
 int createListenSocket(int port)
-{ 
-    
+{  
     // Create a TCP socket with SOCK_CLOEXEC(flag).
     // set SO_REUSEADDR so we can restart the load balancer right away.
     // bind() to the port on any address, then listen(LISTEN_BACKLOG).
     // If bind or listen fails, print the error and exit, because without this socket we cannot work.
+    int s = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
+    if (s < 0)
+    {
+        cerr << "Socket creation failed" << endl;
+        return -1;
+    }
+    int opt = 1;
+    setsockopt(s, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+    sockaddr_in addr;
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(port);
+    addr.sin_addr.s_addr = INADDR_ANY;
+    if (bind(s, (struct sockaddr *)&addr, sizeof(addr)) < 0)
+    {
+        cerr << "bind fail" << endl;
+        close(s);
+        return -1;
+    }
+    if (listen(s, LISTEN_BACKLOG) < 0)
+    {
+        cerr << "listen failed" << endl;
+        close(s);
+        return -1;
+    }
+    return s;
 }
 int connectToServer(const char *host, int port)
 {
     // Create a TCP socket (SOCK_CLOEXEC) and connect it to host:port.
     // Return the socket, or -1 if the connection fails 
+    int server_fd = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
+    if (server_fd < 0)
+    {
+        return -1;
+    }
+    sockaddr_in addr;
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(port);
+    inet_pton(AF_INET, host, &addr.sin_addr);
+    if (connect(server_fd, (struct sockaddr *)&addr, sizeof(addr)) < 0)
+    {
+        close(server_fd);
+        return -1;
+    }
+    return server_fd;
 }
 
 // =============================================================================================
@@ -210,6 +249,13 @@ bool startServer(int port)
     //   Example: "./server 5001 &"
     // Call system() with it.
     // Return true if system() returned 0, otherwise false.
+    string com = string(SERVER_PATH)+" "+to_string(port)+" &";
+    int ret = system(com.c_str());
+    if (ret == 0)
+    {
+        return true;
+    }
+    return false;
 }
 int connectToServerWithWakeup()
 {
@@ -217,6 +263,25 @@ int connectToServerWithWakeup()
     // 2. Otherwise call startServer(). If it fails, return -1.
     // 3. Try connectToServer() up to STARTUP_MAX_ATTEMPTS times 
     // 4. Return the first working socket, or -1 if the server never came up.
+  int srvr_on = connectToServer(serverHost.c_str(), serverPort);
+    if (srvr_on >= 0)
+    {
+        return srvr_on;
+    }
+    if (!startServer(serverPort))
+    {
+        return -1;
+    }
+    for (int32_t ae = 0; ae < STARTUP_MAX_ATTEMPTS; ae++)
+    {
+        usleep(60500);
+        srvr_on = connectToServer(serverHost.c_str(), serverPort);
+        if (srvr_on >= 0)
+        {
+            return srvr_on;
+        }
+    }
+    return -1;
 }
 
 
@@ -235,6 +300,42 @@ void relayOneClient(ClientInfo &c)
     // 5. Server -> client: repeat recv() from serverSock and sendAll() to clientSock.
     //    Stop when recv() returns 0 (the server sent its whole reply and closed) or fails.
     // 6. Close both sockets.
+    int clnt = c.sock;
+    int srvr = connectToServerWithWakeup();
+    if (srvr < 0)
+    {
+        sendError(clnt, "backend server failed to start");
+        close(clnt);
+        return;
+    }
+    char li_si[IO_BUFFER_SIZE];
+    while (true)
+    {
+        ssize_t rd_sz = recv(clnt, li_si, sizeof(li_si), 0);
+        if (rd_sz <= 0)
+        {
+            break;
+        }
+        if (!sendAll(srvr, li_si, rd_sz))
+        {
+            break;
+        }
+    }
+    shutdown(srvr, SHUT_WR);
+    while (true)
+    {
+        ssize_t rd_sz = recv(srvr, li_si, sizeof(li_si), 0);
+        if (rd_sz <= 0)
+        {
+            break;
+        }
+        if (!sendAll(clnt, li_si, rd_sz))
+        {
+            break;
+        }
+    }
+    close(srvr);
+    close(clnt);
 }
 
 
