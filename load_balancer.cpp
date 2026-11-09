@@ -93,7 +93,7 @@ public:
         if (rear == nullptr)
         {
             front = neu;
-            rear = neu
+            rear = neu;
         }
         else
         {
@@ -354,6 +354,40 @@ void acceptLoop(int listenSock)
     //   Otherwise enqueue the client socket.
     // Never wait for the server here, so new clients are always accepted quickly.
     // If accept() fails, print the error and keep going (do not end the thread).
+    while (flag)
+    {
+        sockaddr_in clnt;
+        socklen_t clnt_len = sizeof(clnt);
+        int cs = accept(listenSock, (struct sockaddr *)&clnt, &clnt_len);
+        if (cs < 0)
+        {
+            if (!flag)
+            {
+                break;
+            }
+            cout << "accept error" << endl;
+            continue;
+        }
+        ClientInfo info;
+        info.sock = cs;
+        info.arrivedAt = time(nullptr);
+        char siz[INET_ADDRSTRLEN];
+        inet_ntop(AF_INET,&(clnt.sin_addr),siz,INET_ADDRSTRLEN);
+        info.address = string(siz);
+        info.port = ntohs(clnt.sin_port);
+        queueMutex.lock();
+        if (pendingClients.size() >= MAX_PENDING_CLIENTS)
+        {
+            queueMutex.unlock();
+            sendError(cs, "server busy, try again later");
+            close(cs);
+        }
+        else
+        {
+            pendingClients.enqueue(info);
+            queueMutex.unlock();
+        }
+    }
 }
 void dispatcherLoop()
 {
@@ -361,6 +395,26 @@ void dispatcherLoop()
     // Repeat:
     //   Lock queueMutex, take ONE client out of the queue if there is one, unlock.
     //   If we got a client: call relayOneClient(). The next client is taken out of the queue only after this one is finished.
+    while (flag)
+    {
+        ClientInfo detl;
+        bool clnt_fnd = false;
+        queueMutex.lock();
+        if (!pendingClients.isEmpty())
+        {   
+            detl = pendingClients.dequeue();
+            clnt_fnd = true;
+        }
+        queueMutex.unlock();
+        if (clnt_fnd)
+        {
+            relayOneClient(detl);
+        }
+        else
+        {
+            usleep(10000);
+        }
+    }
 }
 
 void handler(int sg) {
@@ -374,5 +428,9 @@ int main(int argc, char *argv[])
     // 2. listenSock = createListenSocket(LB_PORT).
     // 3. Start a thread that runs acceptLoop(listenSock) and detach it.
     // 4. Call dispatcherLoop().
+    int li_s = createListenSocket(lbPort);
+    thread acpt(acceptLoop, li_s);
+    acpt.detach();
+    dispatcherLoop();
     return 0;
 }
