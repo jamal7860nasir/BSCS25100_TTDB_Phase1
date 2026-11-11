@@ -40,7 +40,7 @@ using namespace std;
 
 // ---- Constants ----
 const char *SERVER_PATH = "./server";      // the program we start when the server is down
-const int IO_BUFFER_SIZE = 64 * 1024;      // fixed buffer for moving bytes
+
 const int LISTEN_BACKLOG = 16;             // connections the OS holds until accept() takes them
 const int MAX_PENDING_CLIENTS = 8;         // clients allowed to wait in our queue. More than this get "server busy".
 const int STARTUP_MAX_ATTEMPTS = 50;       // after starting the server, how many times we try to connect
@@ -268,13 +268,10 @@ int connectToServerWithWakeup()
     {
         return srvr_on;
     }
-    if (!startServer(serverPort))
-    {
-        return -1;
-    }
+    startServer(serverPort);
     for (int32_t ae = 0; ae < STARTUP_MAX_ATTEMPTS; ae++)
     {
-        usleep(60500);
+        usleep(100000);
         srvr_on = connectToServer(serverHost.c_str(), serverPort);
         if (srvr_on >= 0)
         {

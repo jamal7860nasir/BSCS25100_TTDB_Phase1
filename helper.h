@@ -69,3 +69,28 @@ uint32_t compute_crc(const uint8_t* data, int len)
     }
     return ~crc;
 }
+
+
+struct TrailerChecker
+{
+    vector<uint8_t> bytes_rec;
+    void push(uint8_t b)
+    {
+        bytes_rec.push_back(b);
+    }
+    bool verify()
+    {
+        if (bytes_rec.size() < 4)
+        {
+            return false;
+        }
+        int data_len = bytes_rec.size() - 4;
+        uint32_t calc_crc = compute_crc(bytes_rec.data(), data_len);
+        uint32_t crc_vl = 0;
+        for (int ae = 0; ae < 4; ae++)
+        {
+            crc_vl = crc_vl + (((uint32_t)bytes_rec[data_len + ae]) << (ae * 8));
+        }
+        return calc_crc == crc_vl;
+    }
+};

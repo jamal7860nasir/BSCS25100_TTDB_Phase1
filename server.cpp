@@ -1,25 +1,20 @@
-
 #include <iostream>
 #include <string>
 #include <cstdint>
 #include <fstream>
 #include <unistd.h>
 #include <sys/socket.h>
-#include <cstdint>
+#include <netinet/in.h>
+#include <cstring>
 #include <cstdio>
+#include <vector>
+#include "helper.h"
 using namespace std;
-
-// ---- Constants ----
-const int32_t MAX_VARS_PER_FRAME = 16;
-const int32_t MAX_STACK_DEPTH = 64;
 const int32_t MAX_FUNCS = 128;
-const int32_t MAX_TOKENS = MAX_VARS_PER_FRAME + 2; // kW + func_name + upto 16 params/args
+const int32_t MAX_TOKENS = MAX_VARS_PER_FRAME + 2; 
 const int32_t MAX_PATCHES = MAX_FUNCS * 4;
-const uint64_t MAX_SOURCE_BYTES = 15ULL * 1024 * 1024; // sanity cap on the declared file length
-const int32_t IO_BUFFER_SIZE = 64 * 1024;                  // fixed buffer for streaming to/from disk
-const int32_t SOCKET_TIMEOUT_SEC = 5;                      // TODO: apply as SO_RCVTIMEO so a deadclient can't hang the server forever
-
-// ---- Custom data structures
+const uint64_t MAX_SOURCE_BYTES = 15ULL * 1024 * 1024;
+const int32_t SOCKET_TIMEOUT_SEC = 5;
 
 // Stack: back the live Call Stack during execution
 template <typename T>
@@ -148,55 +143,6 @@ public:
         return stepCount;
     }
 };
-
-// Core structs
-struct Variable
-{
-    string name;
-    int32_t value;
-};
-struct Frame
-{
-    string func_name;
-    int32_t argc;
-    Variable argv[MAX_VARS_PER_FRAME];
-    int32_t returnLine;
-    Variable locals[MAX_VARS_PER_FRAME];
-    int32_t localCount;
-};
-struct Snapshot
-{
-    Frame callStack[MAX_STACK_DEPTH];
-    int32_t stackDepth;
-};
-struct TTDBHeader
-{
-    char magic[4]; // "TTDB"
-    int32_t version;
-    int32_t stepCount;
-    int64_t indexOffset;
-};
-void writeHeader(FILE* f, const TTDBHeader& h)
-{
-    fwrite(h.magic, 1, 4, f);
-    fwrite(&h.version, sizeof(int32_t), 1, f);
-
-    // placeholder for other two data members
-}
-
-// resolve.bin - bookkeeping
-struct FuncEntry
-{
-    string funcName;
-    int64_t byteOffsetInResolveBin; // where this function's FUNC header record sits
-};
-struct PendingPatch
-{
-    int64_t byteOffsetOfOffsetField; // where in resolve.bin to seek back and overwrite
-    string targetFuncName;
-};
-
-
 
 // PASS 0x0: READING source.bin + VALIDITY CHECK
 bool readSourceLine(ifstream& in, string& out)
@@ -747,23 +693,20 @@ void writeTdbg(Timeline& timeline, const char* tdbgPath)
     // placing each snapshot in the file while maintaining the index(starting point of each nth snapshot)
     // after timeline add the index array i the file
     // update the header
-    FILE* tb = fopen(tdbgPath, "wb+");
-    if (tb == NULL)
+FILE* tb = fopen(tdbgPath, "wb+");
+    if (tb == NULL) 
     {
         return;
     }
     int32_t stp = timeline.getStepCount();
     TTDBHeader hdr;
-    hdr.magic[0] = 'T';
-    hdr.magic[1] = 'T';
-    hdr.magic[2] = 'D';
-    hdr.magic[3] = 'B';
+    hdr.magic[0] = 'T'; hdr.magic[1] = 'T'; hdr.magic[2] = 'D'; hdr.magic[3] = 'B';
     hdr.version = 1;
     hdr.stepCount = stp;
     hdr.indexOffset = 0;
-    fwrite(&hdr,sizeof(TTDBHeader), 1, tb);
-    int64_t* id_arr =new int64_t[stp];
-    int32_t ctn=0;
+    fwrite(&hdr, sizeof(TTDBHeader), 1, tb);
+    int64_t* id_arr = new int64_t[stp];
+    int32_t ctn = 0;
     TimelineNode* cr = timeline.begin();
     while (cr != nullptr && ctn < stp)
     {
@@ -784,21 +727,94 @@ void writeTdbg(Timeline& timeline, const char* tdbgPath)
     fclose(tb);
 }
 // main section
-int32_t main()
+int32_t main(int argc, char* argv[])
 {
-
-    if (!validateProgram("source.bin"))
+    int port = 5001;
+    if (argc >= 2)
     {
-        // send an error response instead of a .tdbg file
+        port = atoi(argv[1]);
+    }
+    int sfd = socket(AF_INET, SOCK_STREAM, 0);
+    if (sfd < 0) return 1;
+    int opt = 1;
+    setsockopt(sfd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+    sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = INADDR_ANY;
+    addr.sin_port = htons(port);
+    if (bind(sfd, (sockaddr*)&addr, sizeof(addr)) < 0)
+    {
+        close(sfd);
         return 1;
     }
-
-    int64_t mainOffset = resolveProgram("source.bin", "resolve.bin");
-
-    Timeline timeline;
-    executeProgram("resolve.bin", mainOffset, timeline);
-
-    writeTdbg(timeline, "session.tdbg");
-
+    if (listen(sfd, 5) < 0)
+    {
+        close(sfd);
+        return 1;
+    }
+    int cfd = accept(sfd, NULL, NULL);
+    if (cfd < 0)
+    {
+        close(sfd);
+        return 1;
+    }
+    ofstream outSource("source.bin", ios::binary);
+    char buf[1024];
+    vector<uint8_t> rawIncoming;
+    while (true)
+    {
+        ssize_t r = recv(cfd, buf, sizeof(buf), 0);
+        if (r <= 0) break;
+        rawIncoming.insert(rawIncoming.end(), buf, buf + r);
+    }
+    size_t payloadLen = rawIncoming.size();
+    if (payloadLen >= 4) payloadLen -= 4; 
+    if (payloadLen > 0)
+    {
+        outSource.write(reinterpret_cast<const char*>(rawIncoming.data()), payloadLen);
+    }
+    outSource.close();
+    bool success = false;
+    if (validateProgram("source.bin"))
+    {
+        int64_t mainOffset = resolveProgram("source.bin", "resolve.bin");
+        if (mainOffset >= 0)
+        {
+            Timeline timeline;
+            executeProgram("resolve.bin", mainOffset, timeline);
+            writeTdbg(timeline, "session.tdbg");
+            success = true;
+        }
+    }
+    vector<uint8_t> reply;
+    if (success)
+    {
+        reply.push_back(0);
+        ifstream inTdbg("session.tdbg", ios::binary | ios::ate);
+        if (inTdbg.is_open())
+        {
+            streamsize sz = inTdbg.tellg();
+            inTdbg.seekg(0, ios::beg);
+            vector<uint8_t> tdbgData(sz);
+            inTdbg.read(reinterpret_cast<char*>(tdbgData.data()), sz);
+            inTdbg.close();
+            reply.insert(reply.end(), tdbgData.begin(), tdbgData.end());
+        }
+    }
+    else
+    {
+        reply.push_back(1);
+        string errMsg = "validation or compilation failed";
+        reply.insert(reply.end(), errMsg.begin(), errMsg.end());
+    }
+    uint32_t crcVal = compute_crc(reply.data(), reply.size());
+    for (int s = 0; s < 4; s++)
+    {
+        reply.push_back(crcVal >> (s * 8));
+    }
+    send(cfd, reply.data(), reply.size(), 0);
+    close(cfd);
+    close(sfd);
     return 0;
 }
