@@ -272,7 +272,7 @@ void closeTdbg(TdbgReader &r)
 }
 Snapshot *readSnapshotAt(TdbgReader &r, int32_t step)
 {
-if (step < 0 || step >= (int32_t)r.index.size())
+    if (step < 0 || step >= (int32_t)r.index.size())
     {
         return nullptr;
     }
@@ -281,13 +281,14 @@ if (step < 0 || step >= (int32_t)r.index.size())
     {
         return nullptr;
     }
-    Snapshot *snp = new Snapshot();
-    ssize_t red_byt = read(r.file_index, snp, sizeof(Snapshot));
-    if (red_byt != (ssize_t)sizeof(Snapshot))
+    FILE* file = fdopen(dup(r.file_index), "rb");
+    if (file == NULL)
     {
-        delete snp;
         return nullptr;
     }
+    Snapshot *snp = new Snapshot();
+    readSnapshot(file, *snp);
+    fclose(file);
     return snp;
 }
 bool requestDebugFile(const char *host, int port, const char *sourcePath, const char *outTdbgPath, string &outError)

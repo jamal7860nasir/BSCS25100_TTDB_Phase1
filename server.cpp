@@ -713,7 +713,7 @@ FILE* tb = fopen(tdbgPath, "wb+");
         id_arr[ctn] = ftell(tb);
         if (cr->data != nullptr)
         {
-            fwrite(cr->data, sizeof(Snapshot), 1, tb);
+            writeSnapshot(tb, *cr->data);
         }
         cr = cr->next;
         ctn++;
